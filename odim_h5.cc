@@ -18,11 +18,14 @@
 #include "odim_h5.h"
 
 #include <hdf5.h>
-#include <alloca.h>
+#include <malloc.h>
 #include <cstdio>
 #include <cstring>
+#include <time.h>
 
 using namespace odim_h5;
+
+#define timegm _mkgmtime
 
 /* To avoid our clients from having to include the HDF5 headers indirectly, we
  * redefine hid_t.  The following check ensures that our assumption about its
@@ -229,8 +232,8 @@ static auto hdf_storage_type(data::data_type type) -> hid_t
 static auto strings_to_time(const std::string& date, const std::string& time) -> time_t
 {
   struct tm tms;
-  if (   sscanf(date.c_str(), "%04d%02d%02d", &tms.tm_year, &tms.tm_mon, &tms.tm_mday) != 3
-      || sscanf(time.c_str(), "%02d%02d%02d", &tms.tm_hour, &tms.tm_min, &tms.tm_sec) != 3)
+  if (   sscanf_s(date.c_str(), "%04d%02d%02d", &tms.tm_year, &tms.tm_mon, &tms.tm_mday) != 3
+      || sscanf_s(time.c_str(), "%02d%02d%02d", &tms.tm_hour, &tms.tm_min, &tms.tm_sec) != 3)
     throw make_error({}, "date/time syntax error");
   tms.tm_year -= 1900;
   tms.tm_mon -= 1;
@@ -243,7 +246,8 @@ static auto strings_to_time(const std::string& date, const std::string& time) ->
 static auto time_to_strings(time_t val, char date[9], char time[7]) -> void
 {
   struct tm tms;
-  gmtime_r(&val, &tms);
+  //gmtime_r(&val, &tms);
+  gmtime_s(&tms, &val);
   snprintf(date, 9, "%04d%02d%02d", tms.tm_year + 1900, tms.tm_mon + 1, tms.tm_mday);
   snprintf(time, 7, "%02d%02d%02d", tms.tm_hour, tms.tm_min, tms.tm_sec);
 }
@@ -252,7 +256,8 @@ static auto time_to_strings(time_t val, char date[9], char time[7]) -> void
 
 auto odim_h5::release_tag() -> char const*
 {
-  return ODIM_H5_RELEASE_TAG;
+	//return ODIM_H5_RELEASE_TAG;
+	return "1.4.0"; // TODO do this properly later, just sidestepping learning cmake 
 }
 
 auto odim_h5::default_odim_version() -> std::pair<int, int>
@@ -597,7 +602,7 @@ static inline auto group_checked_open_or_create(
     ) -> handle::id_t
 {
   char buf[32];
-  sprintf(buf, name, index + 1);
+  sprintf_s(buf, name, index + 1);
   auto ret = open 
     ? H5Gopen(parent, buf, H5P_DEFAULT) 
     : H5Gcreate(parent, buf, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
@@ -622,11 +627,11 @@ attribute_store::attribute_store(handle::id_t hnd, bool existing)
     H5O_info_t info;
 
     // determine the number of attributes available and reserve space in the vector
-    if (what_ && H5Oget_info(what_, &info) >= 0)
+    if (what_ && H5Oget_info(what_, &info, H5O_INFO_BASIC) >= 0) // interface change? https://stackoverflow.com/questions/62157364/why-is-hdf5-giving-a-too-few-arguments-error-here
       n += info.num_attrs;
-    if (where_ && H5Oget_info(where_, &info) >= 0)
+    if (where_ && H5Oget_info(where_, &info, H5O_INFO_BASIC) >= 0)
       n += info.num_attrs;
-    if (how_ && H5Oget_info(how_, &info) >= 0)
+    if (how_ && H5Oget_info(how_, &info, H5O_INFO_BASIC) >= 0)
       n += info.num_attrs;
     attrs_.reserve(n);
 
@@ -868,7 +873,7 @@ data::data(const handle& parent, bool quality, size_t index)
   for (size_t i = info.nlinks; i > 0; --i)
   {
     char name[32];
-    sprintf(name, "quality%zu", i);
+    sprintf_s(name, "quality%zu", i);
     htri_t ret = H5Lexists(hnd_, name, H5P_DEFAULT);
     if (ret < 0)
       throw make_error(hnd_, "check group exists", name);
@@ -1127,7 +1132,7 @@ dataset::dataset(const handle& parent, size_t index, bool existing)
     for (size_t i = info.nlinks; i > 0; --i)
     {
       char name[32];
-      sprintf(name, "data%zu", i);
+      sprintf_s(name, "data%zu", i);
       htri_t ret = H5Lexists(hnd_, name, H5P_DEFAULT);
       if (ret < 0)
         throw make_error(hnd_, "check group exists", name);
@@ -1141,7 +1146,7 @@ dataset::dataset(const handle& parent, size_t index, bool existing)
     for (size_t i = info.nlinks; i > 0; --i)
     {
       char name[32];
-      sprintf(name, "quality%zu", i);
+      sprintf_s(name, "quality%zu", i);
       htri_t ret = H5Lexists(hnd_, name, H5P_DEFAULT);
       if (ret < 0)
         throw make_error(hnd_, "check group exists", name);
@@ -1205,7 +1210,7 @@ file::file(const std::string& path, io_mode mode)
     for (size_t i = info.nlinks; i > 0; --i)
     {
       char name[32];
-      sprintf(name, "dataset%zu", i);
+      sprintf_s(name, "dataset%zu", i);
       htri_t ret = H5Lexists(hnd_, name, H5P_DEFAULT);
       if (ret < 0)
         throw make_error(hnd_, "check group exists", name);
@@ -1328,7 +1333,7 @@ auto file::version() const -> std::pair<int, int>
 {
   std::pair<int, int> ret;
   auto str = attributes()["version"].get_string();
-  if (sscanf(str.c_str(), "H5rad %d.%d", &ret.first, &ret.second) != 2)
+  if (sscanf_s(str.c_str(), "H5rad %d.%d", &ret.first, &ret.second) != 2)
     throw make_error(hnd_, "read attribute", "version", "syntax error");
   return ret;
 }
@@ -1336,7 +1341,7 @@ auto file::version() const -> std::pair<int, int>
 auto file::set_version(int major, int minor) -> void
 {
   char buf[32];
-  sprintf(buf, "H5rad %d.%d", major, minor);
+  sprintf_s(buf, "H5rad %d.%d", major, minor);
   attributes()["version"].set(buf);
 }
 
